@@ -11,6 +11,7 @@ if [ -z "$SMB_SERVER" ] || [ -z "$SMB_SHARE" ] || \
 fi
 
 SOURCE="/dokploy-data"
+STAGE="/tmp/backup-stage"
 TS_FILE=$(date +"%d-%m-%Y %H:%M")
 
 echo "Starting backup to //$SMB_SERVER/$SMB_SHARE/$REMOTE_PATH"
@@ -30,48 +31,46 @@ sync
 sleep 1
 
 # =====================================
-# Prepare smbclient batch commands
+# Prepare staging directory (hardlinks)
 # =====================================
-echo "Preparing file list..."
-CMD_FILE="/tmp/smb_commands.txt"
-> "$CMD_FILE"
-
-# Create remote base directory
-echo "mkdir ${REMOTE_PATH}" >> "$CMD_FILE"
+echo "Preparing files..."
+rm -rf "$STAGE"
 
 cd "$SOURCE"
-
-# Create all remote subdirectories (sorted so parents come first)
-find . -mindepth 1 -type d \
-  ! -path "*/temp/*" \
-  | sort | while read -r DIR; do
-    echo "mkdir \"${REMOTE_PATH}/${DIR#./}\"" >> "$CMD_FILE"
-done
-
-# Queue file uploads (excluding temp, live sqlite)
 find . -type f \
   ! -path "*/temp/*" \
   ! -name "*.sqlite" \
   ! -name "*.sqlite-wal" \
   ! -name "*.sqlite-shm" \
-| while read -r FILE; do
-  echo "put \"${SOURCE}/${FILE#./}\" \"${REMOTE_PATH}/${FILE#./}\"" >> "$CMD_FILE"
+| while IFS= read -r FILE; do
+  mkdir -p "$STAGE/$(dirname "$FILE")"
+  ln "${SOURCE}/${FILE#./}" "$STAGE/${FILE#./}" 2>/dev/null || \
+  cp "${SOURCE}/${FILE#./}" "$STAGE/${FILE#./}"
 done
-
 cd - >/dev/null
 
-FILE_COUNT=$(grep -c '^put ' "$CMD_FILE" || echo 0)
+FILE_COUNT=$(find "$STAGE" -type f | wc -l)
 echo "Uploading ${FILE_COUNT} files..."
 
 # =====================================
-# Upload via smbclient (single connection)
+# Create remote directory
 # =====================================
 smbclient //${SMB_SERVER}/${SMB_SHARE} \
   -U ${SMB_USER}%${SMB_PASS} \
   --option='client min protocol=SMB2' \
   --option='client max protocol=SMB3' \
   --timeout=1200 \
-  < "$CMD_FILE"
+  -c "mkdir ${REMOTE_PATH}" 2>/dev/null || true
+
+# =====================================
+# Recursive upload (single connection)
+# =====================================
+smbclient //${SMB_SERVER}/${SMB_SHARE} \
+  -U ${SMB_USER}%${SMB_PASS} \
+  --option='client min protocol=SMB2' \
+  --option='client max protocol=SMB3' \
+  --timeout=1200 \
+  -c "recurse ON; prompt OFF; cd ${REMOTE_PATH}; lcd ${STAGE}; mput *"
 
 # Upload timestamp
 echo "${TS_FILE}" > /tmp/lastbackup.txt
@@ -86,7 +85,7 @@ smbclient //${SMB_SERVER}/${SMB_SHARE} \
 # =====================================
 # Cleanup
 # =====================================
-rm -f "$CMD_FILE"
+rm -rf "$STAGE"
 rm -f /tmp/lastbackup.txt
 find "$SOURCE" -type f -name "*.sqlite.backup" -delete
 
