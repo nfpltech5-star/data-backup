@@ -97,14 +97,15 @@ FAILED=0
 while IFS= read -r FILE; do
   REL="${FILE#./}"
   COUNT=$((COUNT + 1))
-  echo "[${COUNT}/${FILE_COUNT}] ${REL}"
+  FSIZE=$(stat -c%s "${SOURCE}/${REL}" 2>/dev/null || echo 0)
+  echo "[${COUNT}/${FILE_COUNT}] ${REL} ($(numfmt --to=iec ${FSIZE}))"
 
-  if ! smbclient //${SMB_SERVER}/${SMB_SHARE} \
+  if ! pv -f "${SOURCE}/${REL}" | smbclient //${SMB_SERVER}/${SMB_SHARE} \
     -U ${SMB_USER}%${SMB_PASS} \
     --option='client min protocol=SMB2' \
     --option='client max protocol=SMB3' \
     --timeout=1200 \
-    -c "put ${SOURCE}/${REL} ${REMOTE_PATH}/${REL}" 2>&1; then
+    -c "put - ${REMOTE_PATH}/${REL}" 2>&1; then
     echo "⚠ Failed: ${REL}"
     FAILED=$((FAILED + 1))
   fi
