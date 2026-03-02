@@ -12,8 +12,7 @@ fi
 
 SOURCE="/dokploy-data"
 TS_FILE=$(date +"%d-%m-%Y %H:%M")
-TS_NAME=$(date +"%Y%m%d_%H%M%S")
-ARCHIVE_NAME="dokploy_data_${TS_NAME}.tar.gz"
+ARCHIVE_NAME="dokploy-backup.tar.gz"
 ARCHIVE_PATH="/tmp/${ARCHIVE_NAME}"
 
 echo "Starting TAR backup to //$SMB_SERVER/$SMB_SHARE/$REMOTE_PATH"
