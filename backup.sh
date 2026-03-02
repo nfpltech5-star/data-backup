@@ -65,49 +65,61 @@ smbclient //${SMB_SERVER}/${SMB_SHARE} \
   --timeout=1200 \
   -c "mkdir ${REMOTE_PATH}" >/dev/null 2>&1 || true
 
-# --- Background progress monitor (every 3 sec) ---
-(
-  while true; do
-    sleep 3
-
-    REMOTE_SIZE=$(smbclient //${SMB_SERVER}/${SMB_SHARE} \
-      -U ${SMB_USER}%${SMB_PASS} \
-      --option='client min protocol=SMB2' \
-      --option='client max protocol=SMB3' \
-      --timeout=30 \
-      -c "ls ${REMOTE_PATH}/${ARCHIVE_NAME}" 2>/dev/null \
-      | grep -i "$ARCHIVE_NAME" \
-      | awk '{for(i=1;i<=NF;i++){if($i ~ /^[0-9]+$/){print $i; exit}}}')
-
-    [ -z "$REMOTE_SIZE" ] && REMOTE_SIZE=0
-
-    PCT=$(awk "BEGIN {p=int($REMOTE_SIZE*100/$TOTAL_BYTES); if(p>100) p=100; print p}")
-    UPLOADED_MB=$(awk "BEGIN {printf \"%.1f\", $REMOTE_SIZE/1048576}")
-
-    # Build bar (20 chars wide)
-    FILLED=$((PCT / 5))
-    EMPTY=$((20 - FILLED))
-    BAR=$(printf '%0.s█' $(seq 1 $FILLED 2>/dev/null) 2>/dev/null || true)
-    SPC=$(printf '%0.s░' $(seq 1 $EMPTY  2>/dev/null) 2>/dev/null || true)
-
-    echo "  [$BAR$SPC] ${PCT}%  (${UPLOADED_MB} / ${TOTAL_MB} MB)"
-  done
-) &
-PROGRESS_PID=$!
-
-# --- Actual upload ---
+# --- Start upload in background ---
 smbclient //${SMB_SERVER}/${SMB_SHARE} \
   -U ${SMB_USER}%${SMB_PASS} \
   --option='client min protocol=SMB2' \
   --option='client max protocol=SMB3' \
   --timeout=1200 \
-  -c "put ${ARCHIVE_PATH} ${REMOTE_PATH}/${ARCHIVE_NAME}"
+  -c "put ${ARCHIVE_PATH} ${REMOTE_PATH}/${ARCHIVE_NAME}" &
+UPLOAD_PID=$!
 
-# --- Stop progress monitor ---
-kill $PROGRESS_PID 2>/dev/null || true
-wait $PROGRESS_PID 2>/dev/null || true
+# --- Wait briefly for smbclient to open the file ---
+sleep 2
+
+# --- Find the fd that points to our archive ---
+ARCHIVE_FD=""
+for fd in /proc/$UPLOAD_PID/fd/*; do
+  target=$(readlink "$fd" 2>/dev/null || true)
+  if [ "$target" = "$ARCHIVE_PATH" ]; then
+    ARCHIVE_FD=$(basename "$fd")
+    break
+  fi
+done
+
+# --- Progress monitor (every 3 sec) ---
+set +e
+while kill -0 $UPLOAD_PID 2>/dev/null; do
+  SENT=0
+  if [ -n "$ARCHIVE_FD" ] && [ -f "/proc/$UPLOAD_PID/fdinfo/$ARCHIVE_FD" ]; then
+    SENT=$(awk '/^pos:/ {print $2}' /proc/$UPLOAD_PID/fdinfo/$ARCHIVE_FD 2>/dev/null || echo 0)
+  fi
+
+  [ -z "$SENT" ] && SENT=0
+  PCT=$(awk "BEGIN {p=int($SENT*100/$TOTAL_BYTES); if(p>100) p=100; print p}")
+  SENT_MB=$(awk "BEGIN {printf \"%.1f\", $SENT/1048576}")
+
+  # Build bar (20 chars wide)
+  FILLED=$((PCT / 5))
+  EMPTY=$((20 - FILLED))
+  BAR=$(printf '%0.s█' $(seq 1 $FILLED 2>/dev/null) 2>/dev/null || true)
+  SPC=$(printf '%0.s░' $(seq 1 $EMPTY  2>/dev/null) 2>/dev/null || true)
+
+  echo "  [${BAR}${SPC}] ${PCT}%  (${SENT_MB} / ${TOTAL_MB} MB)"
+  sleep 3
+done
+
+# --- Wait for upload to finish & check exit code ---
+wait $UPLOAD_PID
+UPLOAD_RC=$?
+set -e
 echo "  [████████████████████] 100%  (${TOTAL_MB} / ${TOTAL_MB} MB)"
 echo "Upload complete."
+
+if [ $UPLOAD_RC -ne 0 ]; then
+  echo "ERROR: Upload failed with exit code $UPLOAD_RC"
+  exit $UPLOAD_RC
+fi
 
 # Upload timestamp
 echo "${TS_FILE}" > /tmp/lastbackup.txt
