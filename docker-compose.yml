@@ -1,0 +1,20 @@
+version: "3.9"
+
+services:
+  dokploy-backup:
+    build: .
+    container_name: dokploy-backup
+    env_file:
+      - .env
+    volumes:
+      - /Dokploy/data:/dokploy-data
+      - smb-backup:/mnt/backup
+    tty: true
+
+volumes:
+  smb-backup:
+    driver: local
+    driver_opts:
+      type: cifs
+      o: "username=${SMB_USER},password=${SMB_PASS},vers=3.0,iocharset=utf8"
+      device: "//${SMB_SERVER}/${SMB_SHARE}"
