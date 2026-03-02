@@ -88,6 +88,23 @@ while IFS= read -r DIR; do
 done <<< "$DIR_LIST"
 
 # =====================================
+# Progress bar function
+# =====================================
+progress_bar() {
+  local current=$1 total=$2 filename=$3
+  local pct=$((current * 100 / total))
+  local bar_len=30
+  local filled=$((pct * bar_len / 100))
+  local empty=$((bar_len - filled))
+
+  local bar=""
+  for ((i = 0; i < filled; i++)); do bar+="█"; done
+  for ((i = 0; i < empty; i++)); do bar+="░"; done
+
+  printf "\r  %s %3d%% [%d/%d] %s\033[K" "$bar" "$pct" "$current" "$total" "$filename"
+}
+
+# =====================================
 # Upload files one by one
 # =====================================
 echo "Uploading files..."
@@ -97,19 +114,20 @@ FAILED=0
 while IFS= read -r FILE; do
   REL="${FILE#./}"
   COUNT=$((COUNT + 1))
-  FSIZE=$(stat -c%s "${SOURCE}/${REL}" 2>/dev/null || echo 0)
-  echo "[${COUNT}/${FILE_COUNT}] ${REL} ($(numfmt --to=iec ${FSIZE}))"
 
-  if ! pv -f "${SOURCE}/${REL}" | smbclient //${SMB_SERVER}/${SMB_SHARE} \
+  progress_bar "$COUNT" "$FILE_COUNT" "$REL"
+
+  if ! smbclient //${SMB_SERVER}/${SMB_SHARE} \
     -U ${SMB_USER}%${SMB_PASS} \
     --option='client min protocol=SMB2' \
     --option='client max protocol=SMB3' \
     --timeout=1200 \
-    -c "put - ${REMOTE_PATH}/${REL}" 2>&1; then
-    echo "⚠ Failed: ${REL}"
+    -c "put ${SOURCE}/${REL} ${REMOTE_PATH}/${REL}" >/dev/null 2>&1; then
+    printf "\n  ⚠ Failed: %s\n" "$REL"
     FAILED=$((FAILED + 1))
   fi
 done < "$FILE_LIST"
+echo ""
 
 # Upload timestamp
 echo "${TS_FILE}" > /tmp/lastbackup.txt
