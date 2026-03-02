@@ -4,89 +4,81 @@ set -e
 # ================================
 # Validate ENV
 # ================================
-if [ -z "$REMOTE_PATH" ]; then
-  echo "❌ Missing REMOTE_PATH environment variable."
+if [ -z "$SMB_SERVER" ] || [ -z "$SMB_SHARE" ] || \
+   [ -z "$REMOTE_PATH" ] || [ -z "$SMB_USER" ] || [ -z "$SMB_PASS" ]; then
+  echo "Missing required environment variables."
   exit 1
 fi
 
-SOURCE="/dokploy-data/"
-MOUNT_POINT="/mnt/backup"
-DEST="${MOUNT_POINT}/${REMOTE_PATH}"
+SOURCE="/dokploy-data"
 TS_FILE=$(date +"%d-%m-%Y %H:%M")
+TS_NAME=$(date +"%Y%m%d_%H%M%S")
+ARCHIVE_NAME="dokploy_data_${TS_NAME}.tar.gz"
+ARCHIVE_PATH="/tmp/${ARCHIVE_NAME}"
 
-echo ""
-echo "╔══════════════════════════════════════════╗"
-echo "║        DOKPLOY BACKUP (rsync)            ║"
-echo "╠══════════════════════════════════════════╣"
-echo "║  Dest   : $DEST                           "
-echo "║  Path   : $REMOTE_PATH                    "
-echo "╚══════════════════════════════════════════╝"
-echo ""
-
-# =====================================
-# Verify mount is available
-# =====================================
-if ! mountpoint -q "$MOUNT_POINT" 2>/dev/null && [ ! -d "$MOUNT_POINT" ]; then
-  echo "❌ SMB share not mounted at $MOUNT_POINT"
-  echo "   Check your docker-compose volume configuration."
-  exit 1
-fi
-
-mkdir -p "$DEST"
+echo "Starting TAR backup to //$SMB_SERVER/$SMB_SHARE/$REMOTE_PATH"
+echo "--------------------------------------"
 
 # =====================================
 # Safe SQLite Snapshots
 # =====================================
-echo "📦 Creating SQLite snapshots..."
-SNAPSHOT_COUNT=0
+echo "Creating SQLite snapshots..."
 while IFS= read -r DB_PATH; do
   SNAPSHOT="${DB_PATH}.backup"
-  echo "   → ${DB_PATH#$SOURCE}"
-  sqlite3 "$DB_PATH" ".backup '$SNAPSHOT'" 2>/dev/null || echo "   ⚠ Snapshot failed for ${DB_PATH#$SOURCE}"
-  SNAPSHOT_COUNT=$((SNAPSHOT_COUNT + 1))
-done < <(find "$SOURCE" -type f -name "*.sqlite" 2>/dev/null)
+  echo "Snapshot → ${DB_PATH#$SOURCE/}"
+  sqlite3 "$DB_PATH" ".backup '$SNAPSHOT'" 2>/dev/null || echo "⚠ Snapshot failed"
+done < <(find "$SOURCE" -type f -name "*.sqlite")
 
-if [ "$SNAPSHOT_COUNT" -gt 0 ]; then
-  echo "   ✅ $SNAPSHOT_COUNT snapshot(s) created"
-  sync
-  sleep 1
-else
-  echo "   ℹ No SQLite files found, skipping snapshots."
-fi
+sync
+sleep 1
 
 # =====================================
-# Rsync with progress bar
+# Create TAR (BusyBox compatible)
 # =====================================
-echo ""
-echo "🚀 Starting rsync transfer..."
-echo "----------------------------------------------"
+echo "Creating archive: ${ARCHIVE_NAME}"
 
-rsync -ah --delete \
-    --info=progress2 \
-    --no-inc-recursive \
-    --exclude='*.sqlite' \
-    --exclude='*.sqlite-wal' \
-    --exclude='*.sqlite-shm' \
-    --exclude='temp/' \
-    --include='*.sqlite.backup' \
-    "$SOURCE" \
-    "$DEST/"
+cd "$SOURCE"
 
-echo "----------------------------------------------"
+# Create file list excluding temp + live sqlite
+find . -type f \
+  ! -path "*/temp/*" \
+  ! -name "*.sqlite" \
+  ! -name "*.sqlite-wal" \
+  ! -name "*.sqlite-shm" \
+  > /tmp/filelist.txt
+
+tar -czf "$ARCHIVE_PATH" -T /tmp/filelist.txt
+
+cd - >/dev/null
 
 # =====================================
-# Write timestamp marker
+# Upload archive
 # =====================================
-echo "${TS_FILE}" > "${DEST}/lastbackup.txt"
+echo "Uploading archive..."
+
+smbclient //${SMB_SERVER}/${SMB_SHARE} \
+  -U ${SMB_USER}%${SMB_PASS} \
+  -c "mkdir ${REMOTE_PATH}" >/dev/null 2>&1 || true
+
+smbclient //${SMB_SERVER}/${SMB_SHARE} \
+  -U ${SMB_USER}%${SMB_PASS} \
+  -c "put ${ARCHIVE_PATH} ${REMOTE_PATH}/${ARCHIVE_NAME}"
+
+# Upload timestamp
+echo "${TS_FILE}" > /tmp/lastbackup.txt
+
+smbclient //${SMB_SERVER}/${SMB_SHARE} \
+  -U ${SMB_USER}%${SMB_PASS} \
+  -c "put /tmp/lastbackup.txt ${REMOTE_PATH}/lastbackup.txt" >/dev/null 2>&1 || true
 
 # =====================================
 # Cleanup
 # =====================================
-find "$SOURCE" -type f -name "*.sqlite.backup" -delete 2>/dev/null || true
+rm -f /tmp/filelist.txt
+rm -f /tmp/lastbackup.txt
+rm -f "$ARCHIVE_PATH"
+find "$SOURCE" -type f -name "*.sqlite.backup" -delete
 
-echo ""
-echo "╔══════════════════════════════════════════╗"
-echo "║  ✅ Backup completed at ${TS_FILE}        "
-echo "║  📍 ${DEST}                                "
-echo "╚══════════════════════════════════════════╝"
-echo ""
+echo "--------------------------------------"
+echo "Backup completed at ${TS_FILE}"
+echo "Archive: ${REMOTE_PATH}/${ARCHIVE_NAME}"

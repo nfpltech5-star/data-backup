@@ -1,14 +1,12 @@
-FROM debian:stable-slim
+FROM alpine:latest
 
-RUN apt-get update && \
-    apt-get install -y rsync bash ca-certificates sqlite3 && \
-    rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache bash samba-client tzdata sqlite
+
+ENV TZ=Asia/Kolkata
 
 WORKDIR /app
 
 COPY backup.sh /app/backup.sh
-COPY restore.sh /app/restore.sh
+RUN chmod +x /app/backup.sh
 
-RUN chmod +x /app/backup.sh /app/restore.sh
-
-ENTRYPOINT ["/bin/bash"]
+CMD ["/bin/bash"]

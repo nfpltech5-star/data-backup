@@ -1,67 +1,55 @@
 #!/bin/bash
 set -e
 
-# ================================
-# Validate ENV
-# ================================
-if [ -z "$REMOTE_PATH" ]; then
-  echo "❌ Missing REMOTE_PATH environment variable."
+if [ -z "$SMB_SERVER" ] || [ -z "$SMB_SHARE" ] || \
+   [ -z "$REMOTE_PATH" ] || [ -z "$SMB_USER" ] || [ -z "$SMB_PASS" ]; then
+  echo "Missing required environment variables."
   exit 1
 fi
 
-DEST="/dokploy-data/"
-MOUNT_POINT="/mnt/backup"
-SOURCE="${MOUNT_POINT}/${REMOTE_PATH}"
+DEST="/dokploy-data"
+TMP_DIR="/tmp/dokploy-restore"
+mkdir -p "$TMP_DIR"
 
-echo ""
-echo "╔══════════════════════════════════════════╗"
-echo "║       DOKPLOY RESTORE (rsync)            ║"
-echo "╠══════════════════════════════════════════╣"
-echo "║  Source : $SOURCE                          "
-echo "║  Path   : $REMOTE_PATH                    "
-echo "╚══════════════════════════════════════════╝"
-echo ""
+echo "Starting restore..."
+echo "--------------------------------------"
 
-# =====================================
-# Verify mount & source
-# =====================================
-if ! mountpoint -q "$MOUNT_POINT" 2>/dev/null && [ ! -d "$MOUNT_POINT" ]; then
-  echo "❌ SMB share not mounted at $MOUNT_POINT"
-  echo "   Check your docker-compose volume configuration."
+# Find latest archive
+LATEST_ARCHIVE=$(
+  smbclient //${SMB_SERVER}/${SMB_SHARE} -U ${SMB_USER}%${SMB_PASS} \
+    -c "cd ${REMOTE_PATH}; ls" 2>/dev/null \
+  | awk '{print $1}' \
+  | grep '^dokploy_data_.*\.tar\.gz$' \
+  | sort | tail -n 1
+)
+
+if [ -z "$LATEST_ARCHIVE" ]; then
+  echo "❌ No backup archive found."
   exit 1
 fi
 
-if [ ! -d "$SOURCE" ]; then
-  echo "❌ Remote backup path not found: $SOURCE"
-  exit 1
-fi
+echo "Downloading: $LATEST_ARCHIVE"
 
-# =====================================
-# Rsync restore with progress
-# =====================================
-echo "🔄 Restoring from backup..."
-echo "----------------------------------------------"
+LOCAL_ARCHIVE="${TMP_DIR}/${LATEST_ARCHIVE}"
 
-rsync -ah --delete \
-    --info=progress2 \
-    --no-inc-recursive \
-    "$SOURCE/" \
-    "$DEST"
+smbclient //${SMB_SERVER}/${SMB_SHARE} \
+  -U ${SMB_USER}%${SMB_PASS} \
+  -c "cd ${REMOTE_PATH}; get ${LATEST_ARCHIVE} ${LOCAL_ARCHIVE}"
 
-echo "----------------------------------------------"
+echo "Clearing destination..."
+rm -rf ${DEST:?}/*
 
-# =====================================
+echo "Extracting archive..."
+tar -xzf "$LOCAL_ARCHIVE" -C "$DEST"
+
 # Restore SQLite backups
-# =====================================
-echo "🗄 Restoring SQLite files..."
+echo "Restoring SQLite files..."
 find "$DEST" -type f -name "*.sqlite.backup" | while read -r SNAP; do
-  echo "   → Restored: ${SNAP#$DEST}"
   mv "$SNAP" "${SNAP%.backup}"
 done
 
-echo ""
-echo "╔══════════════════════════════════════════╗"
-echo "║  ✅ Restore completed successfully        "
-echo "║  📍 Data restored to $DEST                "
-echo "╚══════════════════════════════════════════╝"
-echo ""
+rm -f "$LOCAL_ARCHIVE"
+rmdir "$TMP_DIR" >/dev/null 2>&1 || true
+
+echo "--------------------------------------"
+echo "Restore completed successfully."
