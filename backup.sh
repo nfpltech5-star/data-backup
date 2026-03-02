@@ -58,10 +58,16 @@ echo "Uploading archive..."
 
 smbclient //${SMB_SERVER}/${SMB_SHARE} \
   -U ${SMB_USER}%${SMB_PASS} \
+  --option='client min protocol=SMB2' \
+  --option='client max protocol=SMB3' \
+  --timeout=1200 \
   -c "mkdir ${REMOTE_PATH}" >/dev/null 2>&1 || true
 
 smbclient //${SMB_SERVER}/${SMB_SHARE} \
   -U ${SMB_USER}%${SMB_PASS} \
+  --option='client min protocol=SMB2' \
+  --option='client max protocol=SMB3' \
+  --timeout=1200 \
   -c "put ${ARCHIVE_PATH} ${REMOTE_PATH}/${ARCHIVE_NAME}"
 
 # Upload timestamp
@@ -69,6 +75,9 @@ echo "${TS_FILE}" > /tmp/lastbackup.txt
 
 smbclient //${SMB_SERVER}/${SMB_SHARE} \
   -U ${SMB_USER}%${SMB_PASS} \
+  --option='client min protocol=SMB2' \
+  --option='client max protocol=SMB3' \
+  --timeout=1200 \
   -c "put /tmp/lastbackup.txt ${REMOTE_PATH}/lastbackup.txt" >/dev/null 2>&1 || true
 
 # =====================================

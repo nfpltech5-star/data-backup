@@ -17,6 +17,9 @@ echo "--------------------------------------"
 # Find latest archive
 LATEST_ARCHIVE=$(
   smbclient //${SMB_SERVER}/${SMB_SHARE} -U ${SMB_USER}%${SMB_PASS} \
+    --option='client min protocol=SMB2' \
+    --option='client max protocol=SMB3' \
+    --timeout=1200 \
     -c "cd ${REMOTE_PATH}; ls" 2>/dev/null \
   | awk '{print $1}' \
   | grep '^dokploy_data_.*\.tar\.gz$' \
@@ -34,6 +37,9 @@ LOCAL_ARCHIVE="${TMP_DIR}/${LATEST_ARCHIVE}"
 
 smbclient //${SMB_SERVER}/${SMB_SHARE} \
   -U ${SMB_USER}%${SMB_PASS} \
+  --option='client min protocol=SMB2' \
+  --option='client max protocol=SMB3' \
+  --timeout=1200 \
   -c "cd ${REMOTE_PATH}; get ${LATEST_ARCHIVE} ${LOCAL_ARCHIVE}"
 
 echo "Clearing destination..."
