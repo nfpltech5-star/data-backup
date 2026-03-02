@@ -12,11 +12,8 @@ fi
 
 SOURCE="/dokploy-data"
 TS_FILE=$(date +"%d-%m-%Y %H:%M")
-TS_NAME=$(date +"%Y%m%d_%H%M%S")
-ARCHIVE_NAME="dokploy_data_${TS_NAME}.tar.gz"
-ARCHIVE_PATH="/tmp/${ARCHIVE_NAME}"
 
-echo "Starting TAR backup to //$SMB_SERVER/$SMB_SHARE/$REMOTE_PATH"
+echo "Starting backup to //$SMB_SERVER/$SMB_SHARE/$REMOTE_PATH"
 echo "--------------------------------------"
 
 # =====================================
@@ -33,42 +30,48 @@ sync
 sleep 1
 
 # =====================================
-# Create TAR (BusyBox compatible)
+# Prepare smbclient batch commands
 # =====================================
-echo "Creating archive: ${ARCHIVE_NAME}"
+echo "Preparing file list..."
+CMD_FILE="/tmp/smb_commands.txt"
+> "$CMD_FILE"
+
+# Create remote base directory
+echo "mkdir ${REMOTE_PATH}" >> "$CMD_FILE"
 
 cd "$SOURCE"
 
-# Create file list excluding temp + live sqlite
+# Create all remote subdirectories (sorted so parents come first)
+find . -mindepth 1 -type d \
+  ! -path "*/temp/*" \
+  | sort | while read -r DIR; do
+    echo "mkdir \"${REMOTE_PATH}/${DIR#./}\"" >> "$CMD_FILE"
+done
+
+# Queue file uploads (excluding temp, live sqlite)
 find . -type f \
   ! -path "*/temp/*" \
   ! -name "*.sqlite" \
   ! -name "*.sqlite-wal" \
   ! -name "*.sqlite-shm" \
-  > /tmp/filelist.txt
-
-tar -czf "$ARCHIVE_PATH" -T /tmp/filelist.txt
+| while read -r FILE; do
+  echo "put \"${SOURCE}/${FILE#./}\" \"${REMOTE_PATH}/${FILE#./}\"" >> "$CMD_FILE"
+done
 
 cd - >/dev/null
 
-# =====================================
-# Upload archive
-# =====================================
-echo "Uploading archive..."
+FILE_COUNT=$(grep -c '^put ' "$CMD_FILE" || echo 0)
+echo "Uploading ${FILE_COUNT} files..."
 
+# =====================================
+# Upload via smbclient (single connection)
+# =====================================
 smbclient //${SMB_SERVER}/${SMB_SHARE} \
   -U ${SMB_USER}%${SMB_PASS} \
   --option='client min protocol=SMB2' \
   --option='client max protocol=SMB3' \
   --timeout=1200 \
-  -c "mkdir ${REMOTE_PATH}" >/dev/null 2>&1 || true
-
-smbclient //${SMB_SERVER}/${SMB_SHARE} \
-  -U ${SMB_USER}%${SMB_PASS} \
-  --option='client min protocol=SMB2' \
-  --option='client max protocol=SMB3' \
-  --timeout=1200 \
-  -c "put ${ARCHIVE_PATH} ${REMOTE_PATH}/${ARCHIVE_NAME}"
+  < "$CMD_FILE"
 
 # Upload timestamp
 echo "${TS_FILE}" > /tmp/lastbackup.txt
@@ -83,11 +86,9 @@ smbclient //${SMB_SERVER}/${SMB_SHARE} \
 # =====================================
 # Cleanup
 # =====================================
-rm -f /tmp/filelist.txt
+rm -f "$CMD_FILE"
 rm -f /tmp/lastbackup.txt
-rm -f "$ARCHIVE_PATH"
 find "$SOURCE" -type f -name "*.sqlite.backup" -delete
 
 echo "--------------------------------------"
 echo "Backup completed at ${TS_FILE}"
-echo "Archive: ${REMOTE_PATH}/${ARCHIVE_NAME}"
