@@ -12,13 +12,11 @@ fi
 
 SOURCE="/dokploy-data"
 TS_FILE=$(date +"%d-%m-%Y %H:%M")
+TS_NAME=$(date +"%Y%m%d_%H%M%S")
+ARCHIVE_NAME="dokploy_data_${TS_NAME}.tar.gz"
+ARCHIVE_PATH="/tmp/${ARCHIVE_NAME}"
 
-SMB_COMMON="-U ${SMB_USER}%${SMB_PASS} \
-  --option='client min protocol=SMB2' \
-  --option='client max protocol=SMB3' \
-  --timeout=1200"
-
-echo "Starting backup to //$SMB_SERVER/$SMB_SHARE/$REMOTE_PATH"
+echo "Starting TAR backup to //$SMB_SERVER/$SMB_SHARE/$REMOTE_PATH"
 echo "--------------------------------------"
 
 # =====================================
@@ -35,99 +33,42 @@ sync
 sleep 1
 
 # =====================================
-# Collect files to upload
+# Create TAR (BusyBox compatible)
 # =====================================
-echo "Scanning files..."
-FILE_LIST="/tmp/backup_filelist.txt"
+echo "Creating archive: ${ARCHIVE_NAME}"
 
 cd "$SOURCE"
+
+# Create file list excluding temp + live sqlite
 find . -type f \
   ! -path "*/temp/*" \
   ! -name "*.sqlite" \
   ! -name "*.sqlite-wal" \
   ! -name "*.sqlite-shm" \
-  > "$FILE_LIST"
+  > /tmp/filelist.txt
+
+tar -czf "$ARCHIVE_PATH" -T /tmp/filelist.txt
+
 cd - >/dev/null
 
-FILE_COUNT=$(wc -l < "$FILE_LIST")
-echo "Found ${FILE_COUNT} files to upload."
+# =====================================
+# Upload archive
+# =====================================
+echo "Uploading archive..."
 
-# =====================================
-# Create remote base directory
-# =====================================
 smbclient //${SMB_SERVER}/${SMB_SHARE} \
   -U ${SMB_USER}%${SMB_PASS} \
   --option='client min protocol=SMB2' \
   --option='client max protocol=SMB3' \
   --timeout=1200 \
-  -c "mkdir ${REMOTE_PATH}" 2>/dev/null || true
+  -c "mkdir ${REMOTE_PATH}" >/dev/null 2>&1 || true
 
-# =====================================
-# Collect unique directories & create them
-# =====================================
-echo "Creating remote directories..."
-
-DIR_LIST=$(while IFS= read -r FILE; do
-  dirname "$FILE"
-done < "$FILE_LIST" | sort -u)
-
-while IFS= read -r DIR; do
-  # Build path components and mkdir each level
-  RDIR="${REMOTE_PATH}"
-  IFS='/' read -ra PARTS <<< "${DIR#./}"
-  for PART in "${PARTS[@]}"; do
-    [ -z "$PART" ] && continue
-    RDIR="${RDIR}/${PART}"
-    smbclient //${SMB_SERVER}/${SMB_SHARE} \
-      -U ${SMB_USER}%${SMB_PASS} \
-      --option='client min protocol=SMB2' \
-      --option='client max protocol=SMB3' \
-      --timeout=1200 \
-      -c "mkdir ${RDIR}" 2>/dev/null || true
-  done
-done <<< "$DIR_LIST"
-
-# =====================================
-# Progress bar function
-# =====================================
-progress_bar() {
-  local current=$1 total=$2 filename=$3
-  local pct=$((current * 100 / total))
-  local bar_len=30
-  local filled=$((pct * bar_len / 100))
-  local empty=$((bar_len - filled))
-
-  local bar=""
-  for ((i = 0; i < filled; i++)); do bar+="█"; done
-  for ((i = 0; i < empty; i++)); do bar+="░"; done
-
-  printf "\r  %s %3d%% [%d/%d] %s\033[K" "$bar" "$pct" "$current" "$total" "$filename"
-}
-
-# =====================================
-# Upload files one by one
-# =====================================
-echo "Uploading files..."
-COUNT=0
-FAILED=0
-
-while IFS= read -r FILE; do
-  REL="${FILE#./}"
-  COUNT=$((COUNT + 1))
-
-  progress_bar "$COUNT" "$FILE_COUNT" "$REL"
-
-  if ! smbclient //${SMB_SERVER}/${SMB_SHARE} \
-    -U ${SMB_USER}%${SMB_PASS} \
-    --option='client min protocol=SMB2' \
-    --option='client max protocol=SMB3' \
-    --timeout=1200 \
-    -c "put ${SOURCE}/${REL} ${REMOTE_PATH}/${REL}" >/dev/null 2>&1; then
-    printf "\n  ⚠ Failed: %s\n" "$REL"
-    FAILED=$((FAILED + 1))
-  fi
-done < "$FILE_LIST"
-echo ""
+smbclient //${SMB_SERVER}/${SMB_SHARE} \
+  -U ${SMB_USER}%${SMB_PASS} \
+  --option='client min protocol=SMB2' \
+  --option='client max protocol=SMB3' \
+  --timeout=1200 \
+  -c "put ${ARCHIVE_PATH} ${REMOTE_PATH}/${ARCHIVE_NAME}"
 
 # Upload timestamp
 echo "${TS_FILE}" > /tmp/lastbackup.txt
@@ -142,14 +83,11 @@ smbclient //${SMB_SERVER}/${SMB_SHARE} \
 # =====================================
 # Cleanup
 # =====================================
-rm -f "$FILE_LIST"
+rm -f /tmp/filelist.txt
 rm -f /tmp/lastbackup.txt
+rm -f "$ARCHIVE_PATH"
 find "$SOURCE" -type f -name "*.sqlite.backup" -delete
 
 echo "--------------------------------------"
-if [ "$FAILED" -gt 0 ]; then
-  echo "⚠ Backup completed with ${FAILED} failed file(s) at ${TS_FILE}"
-  exit 1
-else
-  echo "✅ Backup completed at ${TS_FILE} — ${FILE_COUNT} files uploaded"
-fi
+echo "Backup completed at ${TS_FILE}"
+echo "Archive: ${REMOTE_PATH}/${ARCHIVE_NAME}"
