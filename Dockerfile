@@ -1,6 +1,6 @@
 FROM alpine:latest
 
-RUN apk add --no-cache bash samba-client tzdata sqlite
+RUN apk add --no-cache bash samba-client tzdata sqlite tar
 
 ENV TZ=Asia/Kolkata
 

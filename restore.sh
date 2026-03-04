@@ -43,7 +43,7 @@ echo "Clearing destination..."
 rm -rf ${DEST:?}/*
 
 echo "Extracting archive..."
-tar -xzf "$LOCAL_ARCHIVE" -C "$DEST"
+tar -xzf "$LOCAL_ARCHIVE" --no-same-owner -C "$DEST"
 
 # Fix ownership after extraction (n8n runs as node, UID 1000)
 echo "Fixing ownership after extraction..."
