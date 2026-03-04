@@ -30,6 +30,13 @@ smbclient //${SMB_SERVER}/${SMB_SHARE} \
   -c "cd ${REMOTE_PATH}; get ${ARCHIVE_NAME} ${LOCAL_ARCHIVE}"
 
 # =====================================
+# Ensure destination exists with correct ownership
+# =====================================
+echo "Ensuring destination directory exists: $DEST"
+mkdir -p "$DEST"
+chown -R 1000:1000 "$DEST"
+
+# =====================================
 # Clear & extract
 # =====================================
 echo "Clearing destination..."
@@ -37,6 +44,10 @@ rm -rf ${DEST:?}/*
 
 echo "Extracting archive..."
 tar -xzf "$LOCAL_ARCHIVE" -C "$DEST"
+
+# Fix ownership after extraction (n8n runs as node, UID 1000)
+echo "Fixing ownership after extraction..."
+chown -R 1000:1000 "$DEST"
 
 # =====================================
 # Restore SQLite backups
