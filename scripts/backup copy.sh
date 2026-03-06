@@ -6,7 +6,7 @@ set -e
 # Variables
 # ----------------------------
 SOURCE="/Dokploy/data"
-EXCLUDE="data/n8n-test"
+EXCLUDE="/Dokploy/data/n8n-test"
 BACKUP_DIR="/Dokploy/backups"
 BACKUP_NAME="dokploy_backup.tar.gz"
 MOUNT_POINT="/mnt/DokployBackup"
@@ -31,7 +31,7 @@ mkdir -p "$BACKUP_DIR"
 echo "Creating backup archive..."
 
 tar -czf "$BACKUP_DIR/$BACKUP_NAME" \
---exclude="data/n8n-test"
+--exclude="$EXCLUDE" \
 --checkpoint=1000 \
 --checkpoint-action=echo="Processed %u checkpoints" \
 -C /Dokploy data

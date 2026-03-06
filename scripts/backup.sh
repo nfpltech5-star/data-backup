@@ -6,12 +6,36 @@ set -e
 # Variables
 # ----------------------------
 SOURCE="/Dokploy/data"
-EXCLUDE="data/n8n-test"
+EXCLUDE="/Dokploy/data/n8n-test"
 BACKUP_DIR="/Dokploy/backups"
 BACKUP_NAME="dokploy_backup.tar.gz"
 MOUNT_POINT="/mnt/DokployBackup"
 SMB_SHARE="//192.168.1.5/DokployBackup"
 TIMESTAMP=$(date "+%d-%m-%Y %H:%M")
+
+# ----------------------------
+# Validate source folder
+# ----------------------------
+echo "Checking source folder..."
+
+if [ ! -d "$SOURCE" ]; then
+    echo "ERROR: Source folder $SOURCE does not exist."
+    exit 1
+fi
+
+if [ -z "$(ls -A "$SOURCE")" ]; then
+    echo "ERROR: Source folder is empty. Backup aborted."
+    exit 1
+fi
+
+SOURCE_SIZE=$(du -s "$SOURCE" | awk '{print $1}')
+
+if [ "$SOURCE_SIZE" -eq 0 ]; then
+    echo "ERROR: Source folder size is zero. Backup aborted."
+    exit 1
+fi
+
+echo "Source validation passed."
 
 # ----------------------------
 # Stop Docker services
@@ -27,17 +51,15 @@ mkdir -p "$BACKUP_DIR"
 # ----------------------------
 # Create backup
 # ----------------------------
-
 echo "Creating backup archive..."
 
 tar -czf "$BACKUP_DIR/$BACKUP_NAME" \
---exclude="data/n8n-test"
+--exclude="$EXCLUDE" \
 --checkpoint=1000 \
 --checkpoint-action=echo="Processed %u checkpoints" \
 -C /Dokploy data
 
 echo "Backup created: $BACKUP_DIR/$BACKUP_NAME"
-
 
 # ----------------------------
 # Start Docker again
@@ -79,7 +101,6 @@ if [ "$MOUNT_SUCCESS" = true ]; then
 
     echo "Backup copied to $MOUNT_POINT/backups"
 
-    # Create last backup timestamp file on server
     echo "$TIMESTAMP" > "$MOUNT_POINT/backups/lastbackup.txt"
 
     echo "lastbackup.txt updated with time $TIMESTAMP"
@@ -92,7 +113,6 @@ echo "Backup process completed."
 # ----------------------------
 # Unmount NAS
 # ----------------------------
-
 if mountpoint -q "$MOUNT_POINT"; then
     echo "Unmounting NAS..."
     umount "$MOUNT_POINT"
